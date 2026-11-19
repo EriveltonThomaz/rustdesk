@@ -62,9 +62,9 @@ jobs:
           pip3 install Pillow
           python3 - <<'PY'
           import base64, os, re
-          from PIL import Image
+          from PIL import Image, ImageDraw
 
-          # 1. Generate multi-resolution Windows .ico and PNGs from res/icon.png
+          # 1. Main App Icons from official PQD logo (256x256 and 512x512)
           img = Image.open("res/icon.png").convert("RGBA")
           img_512 = img.resize((512, 512), Image.LANCZOS)
           img_512.save("res/icon.png", format="PNG")
@@ -74,7 +74,6 @@ jobs:
           sizes = [(16, 16), (32, 32), (48, 48), (256, 256)]
           ico_targets = [
               "res/icon.ico",
-              "res/tray-icon.ico",
               "flutter/windows/runner/resources/app_icon.ico",
           ]
           if os.path.isdir("res/windows"):
@@ -82,6 +81,29 @@ jobs:
           for t in ico_targets:
               os.makedirs(os.path.dirname(t), exist_ok=True)
               img.save(t, format="ICO", sizes=sizes)
+
+          # 1b. High-contrast square Tray Icon (#0D4F2B + rounded corners + "PQD" in #A4CC44 / #FFFFFF)
+          tray = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+          d = ImageDraw.Draw(tray)
+          d.rounded_rectangle([8, 8, 248, 248], radius=44, fill="#0D4F2B", outline="#A4CC44", width=10)
+          w_c = "#FFFFFF"
+          l_c = "#A4CC44"
+          # Letter P (x: 34..84, y: 74..182)
+          d.rectangle([34, 74, 52, 182], fill=w_c)
+          d.rounded_rectangle([34, 74, 86, 134], radius=22, outline=w_c, width=16)
+          # Letter Q (x: 100..158, y: 74..182)
+          d.ellipse([100, 74, 158, 174], outline=l_c, width=16)
+          d.line([(134, 148), (160, 184)], fill=l_c, width=16)
+          # Letter D (x: 172..224, y: 74..182)
+          d.rectangle([172, 74, 190, 182], fill=w_c)
+          d.arc([152, 74, 224, 182], start=-90, end=90, fill=w_c, width=16)
+          d.rectangle([172, 74, 198, 90], fill=w_c)
+          d.rectangle([172, 166, 198, 182], fill=w_c)
+
+          tray.resize((64, 64), Image.LANCZOS).save("res/tray-icon.png", format="PNG")
+          tray.resize((64, 64), Image.LANCZOS).save("res/64x64.png", format="PNG")
+          tray.resize((32, 32), Image.LANCZOS).save("res/32x32.png", format="PNG")
+          tray.save("res/tray-icon.ico", format="ICO", sizes=[(16, 16), (32, 32), (64, 64)])
 
           # Replace Flutter & res SVGs with embedded PQD PNG so UI titlebar/logo also uses PQD logo
           with open("res/icon.png", "rb") as f:

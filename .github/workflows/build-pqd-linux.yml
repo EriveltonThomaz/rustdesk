@@ -76,9 +76,9 @@ jobs:
           pip3 install Pillow
           python3 - <<'PY'
           import base64, os, re
-          from PIL import Image
+          from PIL import Image, ImageDraw
 
-          # 1. Generate Linux PNG icons from res/icon.png
+          # 1. Generate Linux PNG icons from official PQD logo (128x128, 256x256, 512x512)
           img = Image.open("res/icon.png").convert("RGBA")
           for path, size in [
               ("res/icon.png", (512, 512)),
@@ -86,10 +86,28 @@ jobs:
               ("res/256x256@2x.png", (512, 512)),
               ("res/128x128@2x.png", (256, 256)),
               ("res/128x128.png", (128, 128)),
-              ("res/64x64.png", (64, 64)),
-              ("res/32x32.png", (32, 32)),
           ]:
               img.resize(size, Image.LANCZOS).save(path, format="PNG")
+
+          # 1b. High-contrast square Tray Icon (#0D4F2B + rounded corners + "PQD" in #A4CC44 / #FFFFFF)
+          tray = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+          d = ImageDraw.Draw(tray)
+          d.rounded_rectangle([8, 8, 248, 248], radius=44, fill="#0D4F2B", outline="#A4CC44", width=10)
+          w_c = "#FFFFFF"
+          l_c = "#A4CC44"
+          d.rectangle([34, 74, 52, 182], fill=w_c)
+          d.rounded_rectangle([34, 74, 86, 134], radius=22, outline=w_c, width=16)
+          d.ellipse([100, 74, 158, 174], outline=l_c, width=16)
+          d.line([(134, 148), (160, 184)], fill=l_c, width=16)
+          d.rectangle([172, 74, 190, 182], fill=w_c)
+          d.arc([152, 74, 224, 182], start=-90, end=90, fill=w_c, width=16)
+          d.rectangle([172, 74, 198, 90], fill=w_c)
+          d.rectangle([172, 166, 198, 182], fill=w_c)
+
+          tray.resize((64, 64), Image.LANCZOS).save("res/tray-icon.png", format="PNG")
+          tray.resize((64, 64), Image.LANCZOS).save("res/64x64.png", format="PNG")
+          tray.resize((32, 32), Image.LANCZOS).save("res/32x32.png", format="PNG")
+          tray.save("res/tray-icon.ico", format="ICO", sizes=[(16, 16), (32, 32), (64, 64)])
 
           with open("res/icon.png", "rb") as f:
               b64 = base64.b64encode(f.read()).decode("ascii")
