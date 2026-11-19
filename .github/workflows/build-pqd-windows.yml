@@ -152,7 +152,7 @@ jobs:
               with open(common_path, "w", encoding="utf-8") as f:
                   f.write(c_txt)
 
-          # 4. Patch Runner.rc app title
+          # 4. Patch Runner.rc app title and CMakeLists.txt BINARY_NAME
           rc_path = "flutter/windows/runner/Runner.rc"
           if os.path.exists(rc_path):
               with open(rc_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -160,6 +160,14 @@ jobs:
               rc = rc.replace("RustDesk", app)
               with open(rc_path, "w", encoding="utf-8") as f:
                   f.write(rc)
+
+          cmake_path = "flutter/windows/CMakeLists.txt"
+          if os.path.exists(cmake_path):
+              with open(cmake_path, "r", encoding="utf-8") as f:
+                  cm = f.read()
+              cm = cm.replace('set(BINARY_NAME "rustdesk")', f'set(BINARY_NAME "{app}")')
+              with open(cmake_path, "w", encoding="utf-8") as f:
+                  f.write(cm)
           PY
 
       - name: Install LLVM and Clang
@@ -248,7 +256,7 @@ jobs:
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e "../../rustdesk/${APP_NAME}.exe"
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/Suporte-PQD.exe
