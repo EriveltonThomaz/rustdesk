@@ -1,0 +1,201 @@
+name: Build Suporte PQD (Windows x64)
+
+on:
+  workflow_dispatch:
+
+env:
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_CMAKE_VERSION: "4.3.0"
+
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build-topmost:
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  build-windows-x64:
+    needs: [generate-bridge, build-topmost]
+    runs-on: windows-2022
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e8e0b5a5461c64a875d1 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Apply PQD Informatica branding and server config
+        shell: bash
+        env:
+          CFG_RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+          CFG_RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+          CFG_API_SERVER: ${{ secrets.API_SERVER }}
+          CFG_APP_NAME: ${{ secrets.APP_NAME }}
+        run: |
+          pip3 install Pillow
+          python3 - <<'PY'
+          import os, re
+          from PIL import Image
+
+          # 1. Generate Windows .ico from res/icon.png
+          img = Image.open("res/icon.png").convert("RGBA")
+          sizes = [(16,16), (24,24), (32,32), (48,48), (64,64), (128,128), (256,256)]
+          img.save("res/icon.ico", format="ICO", sizes=sizes)
+          img.save("flutter/windows/runner/resources/app_icon.ico", format="ICO", sizes=sizes)
+
+          # 2. Patch libs/hbb_common/src/config.rs
+          srv = os.environ["CFG_RENDEZVOUS_SERVER"].strip()
+          pub = os.environ["CFG_RS_PUB_KEY"].strip()
+          api = os.environ["CFG_API_SERVER"].strip()
+          app = os.environ["CFG_APP_NAME"].strip()
+
+          cfg_path = "libs/hbb_common/src/config.rs"
+          with open(cfg_path, "r", encoding="utf-8") as f:
+              txt = f.read()
+
+          txt = re.sub(
+              r'pub const RENDEZVOUS_SERVERS:\s*&\[&str\]\s*=\s*&\[[^\]]*\];',
+              f'pub const RENDEZVOUS_SERVERS: &[&str] = &["{srv}"];',
+              txt,
+          )
+          txt = re.sub(
+              r'pub const RS_PUB_KEY:\s*&str\s*=\s*"[^"]*";',
+              f'pub const RS_PUB_KEY: &str = "{pub}";',
+              txt,
+          )
+          txt = re.sub(
+              r'pub static ref PROD_RENDEZVOUS_SERVER:\s*RwLock<String>\s*=\s*RwLock::new\("[^"]*".to_owned\(\)\);',
+              f'pub static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new("{srv}".to_owned());',
+              txt,
+          )
+          txt = re.sub(
+              r'pub static ref APP_NAME:\s*RwLock<String>\s*=\s*RwLock::new\("[^"]*".to_owned\(\)\);',
+              f'pub static ref APP_NAME: RwLock<String> = RwLock::new("{app}".to_owned());',
+              txt,
+          )
+          if api and "https://api.rustdesk.com" in txt:
+              txt = txt.replace("https://api.rustdesk.com", api)
+
+          with open(cfg_path, "w", encoding="utf-8") as f:
+              f.write(txt)
+
+          # 3. Patch Runner.rc app title
+          rc_path = "flutter/windows/runner/Runner.rc"
+          if os.path.exists(rc_path):
+              with open(rc_path, "r", encoding="utf-8", errors="ignore") as f:
+                  rc = f.read()
+              rc = rc.replace("RustDesk", app)
+              with open(rc_path, "w", encoding="utf-8") as f:
+                  f.write(rc)
+          PY
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225 # v2.12.0
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Replace engine with rustdesk custom flutter engine
+        shell: bash
+        run: |
+          flutter precache --windows
+          curl -fsSL -o windows-x64-release.zip https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip
+          unzip -o windows-x64-release.zip -d windows-x64-release
+          cp -rf windows-x64-release/* "C:/hostedtoolcache/windows/flutter/stable-${FLUTTER_VERSION}-x64/bin/cache/artifacts/engine/windows-x64-release/"
+
+      - name: Patch flutter
+        shell: bash
+        run: bash .github/patches/apply_flutter_source_patches.sh || true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: windows-2022
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        shell: bash
+        run: |
+          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Build rustdesk
+        shell: powershell
+        run: |
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          mv ./flutter/build/windows/x64/runner/Release ./rustdesk
+
+      - name: Find Runner.res
+        continue-on-error: true
+        shell: bash
+        run: |
+          runner_res=$(find . -name "Runner.res" | head -n 1)
+          if [ -n "$runner_res" ]; then
+            cp "$runner_res" ./libs/portable/Runner.res
+          fi
+
+      - name: Download RustDeskTempTopMostWindow artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: topmostwindow-artifacts-x64
+          path: "./rustdesk"
+
+      - name: Build self-extracted executable
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          popd
+          mkdir -p ./SignOutput
+          mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/Suporte-PQD.exe
+
+      - name: Upload Suporte-PQD.exe artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: suporte-pqd-windows-x64
+          path: ./SignOutput/Suporte-PQD.exe
+          if-no-files-found: error
