@@ -11,6 +11,10 @@ env:
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_CMAKE_VERSION: "4.3.0"
+  RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+  RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+  API_SERVER: ${{ secrets.API_SERVER }}
+  APP_NAME: ${{ secrets.APP_NAME }}
 
 jobs:
   generate-bridge:
@@ -57,14 +61,44 @@ jobs:
         run: |
           pip3 install Pillow
           python3 - <<'PY'
-          import os, re
+          import base64, os, re
           from PIL import Image
 
-          # 1. Generate Windows .ico from res/icon.png
+          # 1. Generate multi-resolution Windows .ico and PNGs from res/icon.png
           img = Image.open("res/icon.png").convert("RGBA")
-          sizes = [(16,16), (24,24), (32,32), (48,48), (64,64), (128,128), (256,256)]
-          img.save("res/icon.ico", format="ICO", sizes=sizes)
-          img.save("flutter/windows/runner/resources/app_icon.ico", format="ICO", sizes=sizes)
+          img_512 = img.resize((512, 512), Image.LANCZOS)
+          img_512.save("res/icon.png", format="PNG")
+          img_256 = img.resize((256, 256), Image.LANCZOS)
+          img_256.save("res/logo.png", format="PNG")
+
+          sizes = [(16, 16), (32, 32), (48, 48), (256, 256)]
+          ico_targets = [
+              "res/icon.ico",
+              "res/tray-icon.ico",
+              "flutter/windows/runner/resources/app_icon.ico",
+          ]
+          if os.path.isdir("res/windows"):
+              ico_targets.append("res/windows/icon.ico")
+          for t in ico_targets:
+              os.makedirs(os.path.dirname(t), exist_ok=True)
+              img.save(t, format="ICO", sizes=sizes)
+
+          # Replace Flutter & res SVGs with embedded PQD PNG so UI titlebar/logo also uses PQD logo
+          with open("res/icon.png", "rb") as f:
+              b64 = base64.b64encode(f.read()).decode("ascii")
+          svg_wrapper = (
+              '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+              f'<image width="512" height="512" href="data:image/png;base64,{b64}"/>'
+              '</svg>'
+          )
+          for svg_target in [
+              "flutter/assets/icon.svg",
+              "res/logo.svg",
+              "res/logo-header.svg",
+          ]:
+              if os.path.exists(svg_target):
+                  with open(svg_target, "w", encoding="utf-8") as f:
+                      f.write(svg_wrapper)
 
           # 2. Patch libs/hbb_common/src/config.rs
           srv = os.environ["CFG_RENDEZVOUS_SERVER"].strip()
@@ -102,7 +136,23 @@ jobs:
           with open(cfg_path, "w", encoding="utf-8") as f:
               f.write(txt)
 
-          # 3. Patch Runner.rc app title
+          # 3. Patch src/common.rs so get_api_server_ returns CFG_API_SERVER when api is empty
+          common_path = "src/common.rs"
+          if api and os.path.exists(common_path):
+              with open(common_path, "r", encoding="utf-8") as f:
+                  c_txt = f.read()
+              c_txt = c_txt.replace("https://admin.rustdesk.com", api)
+              marker = "    if !api.is_empty() {\n        return api.to_owned();\n    }"
+              if marker in c_txt:
+                  c_txt = c_txt.replace(
+                      marker,
+                      marker + f'\n    return "{api}".to_owned();',
+                      1,
+                  )
+              with open(common_path, "w", encoding="utf-8") as f:
+                  f.write(c_txt)
+
+          # 4. Patch Runner.rc app title
           rc_path = "flutter/windows/runner/Runner.rc"
           if os.path.exists(rc_path):
               with open(rc_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -163,6 +213,11 @@ jobs:
 
       - name: Build rustdesk
         shell: powershell
+        env:
+          RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+          API_SERVER: ${{ secrets.API_SERVER }}
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           mv ./flutter/build/windows/x64/runner/Release ./rustdesk
@@ -184,6 +239,11 @@ jobs:
 
       - name: Build self-extracted executable
         shell: bash
+        env:
+          RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+          API_SERVER: ${{ secrets.API_SERVER }}
+          APP_NAME: ${{ secrets.APP_NAME }}
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
